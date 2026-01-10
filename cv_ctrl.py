@@ -488,6 +488,21 @@ class OpencvFuncs():
         self.base_ctrl.base_json_ctrl({"T":self.CMD_GIMBAL,"X":self.pan_angle,"Y":self.tilt_angle,"SPD":gimbal_spd,"ACC":gimbal_acc})
         return distance
 
+    def set_objects_target_class_id(self, class_id):
+        try:
+            class_id = int(class_id)
+        except Exception:
+            return
+        if class_id < 0:
+            return
+        self.objs_target_class_id = class_id
+        self.objs_track_active = False
+        self.objs_tracker = None
+        self.objs_bbox_xyxy = None
+        self.objs_fail_count = 0
+        self.objs_last_confirmed_ts = 0.0
+        self.objs_last_detections = []
+
     def _init_objects_dnn(self):
         if self.objs_detector == 'tf_openimages':
             if not os.path.exists(self.objs_tf_model_path):

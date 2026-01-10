@@ -245,6 +245,12 @@
                                 <div><button onclick="cmdSend(cv_clor,0,0);" class="ctl_btn">COLOR</button></div>
                                 <div><button onclick="cmdSend(mp_hand,0,0);" class="ctl_btn">HAND GS</button></div>
                             </div>
+                            <div id="objs_target_ctrl">
+                                <div>
+                                    <input id="objs_target_class_id" type="number" min="0" step="1" placeholder="Target class id" />
+                                    <button onclick="setObjectsTargetClassId();" class="ctl_btn">SET TARGET</button>
+                                </div>
+                            </div>
                         </div>
                         <div>  
                             <h2 class="sc_title feed_ct_tt">MediaPipe Funcs</h2>

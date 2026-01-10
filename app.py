@@ -558,6 +558,10 @@ def handle_socket_cmd(message):
         print("Error decoding JSON.[app.handle_socket_cmd]")
         return
     cmd_a = float(json_data.get("A", 0))
+    if cmd_a == float(f['code'].get('cv_objt', -1)):
+        cvf.set_objects_target_class_id(json_data.get("B", 0))
+        threading.Thread(target=update_data_websocket_single, daemon=True).start()
+        return
     if cmd_a in cmd_actions:
         cmd_actions[cmd_a]()
     else:

@@ -52,6 +52,8 @@ code:
   mp_face: 10308
   mp_hand: 10306
   mp_pose: 10309
+  # Set OBJECTS target class id (uses B field in /ctrl message)
+  cv_objt: 10310
   pic_cap: 10201
   re_capt: 10402
   re_none: 10401

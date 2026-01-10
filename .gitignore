@@ -6,4 +6,8 @@ tutorial_cn/.ipynb_checkpoints/
 templates/pictures/photo*
 
 *.log
+
+# Downloaded ML models (large; keep out of git)
+models/openimages/ssd_mobilenet_v2_oid_v4_2018_12_12.tar.gz
+models/openimages/ssd_mobilenet_v2_oid_v4_2018_12_12/
 templates/videos/video*

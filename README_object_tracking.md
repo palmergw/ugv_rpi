@@ -56,8 +56,33 @@ Key knobs:
 ## Selecting other animals later
 
 This implementation is based on a numeric **class id**.
-- For Open Images models, use the model’s numeric class id for the category you want.
-- For the default VOC model (`caffe_voc`), the class ids are VOC indices (note: VOC does not include rabbit).
+
+### Where to find class ids
+
+The exact meaning of `cv.objs_target_class_id` depends on `cv.objs_detector`:
+
+- `tf_openimages`: the **numeric class id** used by the TensorFlow Object Detection API label map for Open Images.
+  - For the recommended model (`ssd_mobilenet_v2_oid_v4_2018_12_12`), these ids are defined in TensorFlow’s Open Images label map:
+    - `oid_bbox_trainable_label_map.pbtxt`
+    - In the TensorFlow `models` GitHub repo, it typically lives at:
+      - `models/research/object_detection/data/oid_bbox_trainable_label_map.pbtxt`
+  - Practical lookup:
+    1) Download that `*.pbtxt` somewhere on your Pi (or your dev machine).
+    2) Search for the display name you want (example for Rabbit):
+       - `grep -n "display_name: \"Rabbit\"" oid_bbox_trainable_label_map.pbtxt -n -B2 -A2`
+    3) Use the nearby `id:` value as `cv.objs_target_class_id`.
+  - Note: Open Images also has “MIDs” like `/m/...` in other metadata files; this repo’s current `tf_openimages` path uses the **numeric** `id:` from the TF label map.
+
+- `caffe_voc`: the **VOC class index** from the hard-coded `class_names` list in `cv_ctrl.py`.
+  - Practical lookup:
+    - Check the list in `cv_ctrl.py` under the “cv_dnn_objects” section; the array index is the class id.
+  - Note: VOC does not include rabbit.
+
+### Drawing other detections
+
+Drawing behavior is controlled by `cv.objs_draw_mode`:
+- `all`: draw all detections (on frames where detection runs)
+- `target`: draw only the currently selected/tracked target
 
 ## Files
 

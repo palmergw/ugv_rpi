@@ -8,6 +8,7 @@ import time
 import glob
 import numpy as np
 
+
 curpath = os.path.realpath(__file__)
 thisPath = os.path.dirname(curpath)
 with open(thisPath + '/config.yaml', 'r') as yaml_file:

@@ -601,6 +601,9 @@ if __name__ == "__main__":
         base.base_json_ctrl({"T":f['cmd_config']['cmd_arm_ctrl_ui'],"E":f['args_config']['arm_default_e'],"Z":f['args_config']['arm_default_z'],"R":f['args_config']['arm_default_r']})
     else:
         base.gimbal_ctrl(0, 0, 200, 10)
+        # cvf.set_cv_mode(f['code']['mp_hand'])
+        # cvf.set_cv_mode(f['code']['cv_clor'])
+        # cvf.set_movtion_lock(False)
 
     # feedback loop starts
     si.start()

@@ -1,5 +1,5 @@
 #!/bin/bash
-
+echo $PYQT5_LICENSE
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run with sudo."
     echo "Use 'sudo ./setup.sh' instead of './setup.sh'"

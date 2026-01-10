@@ -63,7 +63,7 @@ The exact meaning of `cv.objs_target_class_id` depends on `cv.objs_detector`:
 
 - `tf_openimages`: the **numeric class id** used by the TensorFlow Object Detection API label map for Open Images.
   - For the recommended model (`ssd_mobilenet_v2_oid_v4_2018_12_12`), these ids are defined in TensorFlow’s Open Images label map:
-    - `oid_bbox_trainable_label_map.pbtxt`
+    - [oid_bbox_trainable_label_map.pbtxt](https://github.com/tensorflow/models/blob/master/research/object_detection/data/oid_bbox_trainable_label_map.pbtxt)
     - In the TensorFlow `models` GitHub repo, it typically lives at:
       - `models/research/object_detection/data/oid_bbox_trainable_label_map.pbtxt`
   - Practical lookup:

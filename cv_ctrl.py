@@ -87,12 +87,32 @@ class OpencvFuncs():
             self.color_upper = np.array(f['cv']['color_upper'])
         self.track_color_iterate = f['cv']['track_color_iterate']
 
-        # cv_dnn_objects
-        self.net = cv2.dnn.readNetFromCaffe(thisPath + '/models/deploy.prototxt', thisPath + '/models/mobilenet_iter_73000.caffemodel')
-        self.class_names = ["background", "aeroplane", "bicycle", "bird", "boat",
-                            "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
-                            "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
-                            "sofa", "train", "tvmonitor"]
+        # cv_dnn_objects (detect + optional tracking)
+        self.objs_detector = f.get('cv', {}).get('objs_detector', 'caffe_voc')
+        self.objs_conf_threshold = float(f.get('cv', {}).get('objs_conf_threshold', 0.2))
+        self.objs_target_class_id = int(f.get('cv', {}).get('objs_target_class_id', 15))
+        self.objs_draw_mode = str(f.get('cv', {}).get('objs_draw_mode', 'all')).lower()
+        self.objs_track_enable = bool(f.get('cv', {}).get('objs_track_enable', True))
+        self.objs_track_iterate = float(f.get('cv', {}).get('objs_track_iterate', self.track_faces_iterate))
+        self.objs_tracker_type = str(f.get('cv', {}).get('objs_tracker_type', 'MOSSE')).upper()
+        self.objs_detect_interval_frames = int(f.get('cv', {}).get('objs_detect_interval_frames', 12))
+        self.objs_confirm_timeout_s = float(f.get('cv', {}).get('objs_confirm_timeout_s', 3.0))
+        self.objs_lost_fail_count = int(f.get('cv', {}).get('objs_lost_fail_count', 5))
+        self.objs_iou_confirm_threshold = float(f.get('cv', {}).get('objs_iou_confirm_threshold', 0.3))
+        self.objs_tf_model_path = os.path.join(thisPath, f.get('cv', {}).get('objs_tf_model_path', 'models/openimages/ssd_mobilenet_v2_oid_v4/frozen_inference_graph.pb'))
+        self.objs_tf_config_path = os.path.join(thisPath, f.get('cv', {}).get('objs_tf_config_path', 'models/openimages/ssd_mobilenet_v2_oid_v4/graph.pbtxt'))
+
+        self.net = None
+        self.class_names = None
+        self._init_objects_dnn()
+
+        self.objs_track_active = False
+        self.objs_tracker = None
+        self.objs_bbox_xyxy = None
+        self.objs_fail_count = 0
+        self.objs_last_confirmed_ts = 0.0
+        self.objs_frame_idx = 0
+        self.objs_last_detections = []
 
         # mediapipe
         self.mpDraw = mp.solutions.drawing_utils
@@ -468,6 +488,112 @@ class OpencvFuncs():
         self.base_ctrl.base_json_ctrl({"T":self.CMD_GIMBAL,"X":self.pan_angle,"Y":self.tilt_angle,"SPD":gimbal_spd,"ACC":gimbal_acc})
         return distance
 
+    def _init_objects_dnn(self):
+        if self.objs_detector == 'tf_openimages':
+            if not os.path.exists(self.objs_tf_model_path):
+                print(f"[cv_ctrl] tf_openimages selected but model not found: {self.objs_tf_model_path}")
+                self.net = None
+                self.class_names = None
+                return
+            try:
+                pbtxt = self.objs_tf_config_path if os.path.exists(self.objs_tf_config_path) else ""
+                self.net = cv2.dnn.readNetFromTensorflow(self.objs_tf_model_path, pbtxt)
+                self.class_names = None
+            except Exception as e:
+                print(f"[cv_ctrl] failed to init tf_openimages DNN: {e}")
+                self.net = None
+                self.class_names = None
+                return
+        else:
+            self.net = cv2.dnn.readNetFromCaffe(thisPath + '/models/deploy.prototxt', thisPath + '/models/mobilenet_iter_73000.caffemodel')
+            self.class_names = ["background", "aeroplane", "bicycle", "bird", "boat",
+                                "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
+                                "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
+                                "sofa", "train", "tvmonitor"]
+
+    def _create_tracker(self):
+        name = self.objs_tracker_type
+        try:
+            legacy = getattr(cv2, 'legacy', None)
+            if name == 'MOSSE':
+                if legacy is not None and hasattr(legacy, 'TrackerMOSSE_create'):
+                    return legacy.TrackerMOSSE_create()
+                if hasattr(cv2, 'TrackerMOSSE_create'):
+                    return cv2.TrackerMOSSE_create()
+            if name == 'KCF':
+                if legacy is not None and hasattr(legacy, 'TrackerKCF_create'):
+                    return legacy.TrackerKCF_create()
+                if hasattr(cv2, 'TrackerKCF_create'):
+                    return cv2.TrackerKCF_create()
+            if name == 'CSRT':
+                if legacy is not None and hasattr(legacy, 'TrackerCSRT_create'):
+                    return legacy.TrackerCSRT_create()
+                if hasattr(cv2, 'TrackerCSRT_create'):
+                    return cv2.TrackerCSRT_create()
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _clip_bbox_xyxy(bbox, w, h):
+        x1, y1, x2, y2 = bbox
+        x1 = max(0, min(int(x1), w - 1))
+        y1 = max(0, min(int(y1), h - 1))
+        x2 = max(0, min(int(x2), w - 1))
+        y2 = max(0, min(int(y2), h - 1))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return (x1, y1, x2, y2)
+
+    @staticmethod
+    def _iou_xyxy(a, b):
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter = inter_w * inter_h
+        if inter == 0:
+            return 0.0
+        area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+        area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+        denom = (area_a + area_b - inter)
+        return float(inter) / float(denom) if denom > 0 else 0.0
+
+    def _objects_detect(self, img_bgr):
+        if self.net is None:
+            return []
+
+        h, w = img_bgr.shape[:2]
+        if self.objs_detector == 'tf_openimages':
+            blob = cv2.dnn.blobFromImage(img_bgr, size=(300, 300), swapRB=True, crop=False)
+        else:
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            blob = cv2.dnn.blobFromImage(cv2.resize(img_rgb, (300, 300)), 0.007843, (300, 300), 127.5)
+        self.net.setInput(blob)
+        detections = self.net.forward()
+
+        results = []
+        if detections is None or len(detections.shape) != 4 or detections.shape[3] < 7:
+            return results
+
+        for i in range(0, detections.shape[2]):
+            confidence = float(detections[0, 0, i, 2])
+            if confidence < self.objs_conf_threshold:
+                continue
+            class_id = int(detections[0, 0, i, 1])
+            box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+            (x1, y1, x2, y2) = box.astype("int")
+            clipped = self._clip_bbox_xyxy((x1, y1, x2, y2), w, h)
+            if clipped is None:
+                continue
+            results.append({"class_id": class_id, "confidence": confidence, "bbox": clipped})
+
+        return results
+
     def cv_detect_faces(self, img):
         gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         faces = self.faceCascade.detectMultiScale(
@@ -532,25 +658,104 @@ class OpencvFuncs():
         overlay_buffer = np.zeros_like(img)
         cv2.putText(overlay_buffer, 'CV_OBJS', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        h, w = img.shape[:2]
+        center_x, center_y = w // 2, h // 2
+        self.objs_frame_idx += 1
 
-        (h, w) = img.shape[:2]
-        blob = cv2.dnn.blobFromImage(cv2.resize(img, (300, 300)), 0.007843, (300, 300), 127.5)
-        self.net.setInput(blob)
-        detections = self.net.forward()
+        if self.net is None:
+            cv2.putText(overlay_buffer, 'DNN: not initialized', (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 255), 1)
+            self.overlay = overlay_buffer
+            return
 
-        for i in range(0, detections.shape[2]):
-            confidence = detections[0, 0, i, 2]
+        detect_due = (not self.objs_track_active) or (self.objs_detect_interval_frames > 0 and (self.objs_frame_idx % self.objs_detect_interval_frames == 0))
+        detections = []
+        if detect_due:
+            detections = self._objects_detect(img)
+            self.objs_last_detections = detections
 
-            if confidence > 0.2:
-                idx = int(detections[0, 0, i, 1])
-                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
-                (startX, startY, endX, endY) = box.astype("int")
+            target_candidates = [d for d in detections if d["class_id"] == self.objs_target_class_id]
+            if self.objs_track_active and self.objs_bbox_xyxy is not None and len(target_candidates) > 0:
+                best = None
+                best_iou = 0.0
+                for d in target_candidates:
+                    iou = self._iou_xyxy(self.objs_bbox_xyxy, d["bbox"])
+                    if iou > best_iou:
+                        best_iou = iou
+                        best = d
+                if best is not None and best_iou >= self.objs_iou_confirm_threshold:
+                    self.objs_bbox_xyxy = best["bbox"]
+                    self.objs_last_confirmed_ts = time.time()
+                    self.objs_fail_count = 0
+                    tracker = self._create_tracker()
+                    if tracker is not None:
+                        x1, y1, x2, y2 = self.objs_bbox_xyxy
+                        tracker.init(img, (x1, y1, x2 - x1, y2 - y1))
+                        self.objs_tracker = tracker
+            elif (not self.objs_track_active) and len(target_candidates) > 0:
+                best = max(target_candidates, key=lambda d: d["confidence"])
+                self.objs_bbox_xyxy = best["bbox"]
+                self.objs_last_confirmed_ts = time.time()
+                self.objs_fail_count = 0
+                tracker = self._create_tracker()
+                if tracker is not None:
+                    x1, y1, x2, y2 = self.objs_bbox_xyxy
+                    tracker.init(img, (x1, y1, x2 - x1, y2 - y1))
+                self.objs_tracker = tracker
+                self.objs_track_active = True
 
-                label = "{}: {:.2f}%".format(self.class_names[idx], confidence * 100)
-                cv2.rectangle(overlay_buffer, (startX, startY), (endX, endY), (0, 255, 0), 2)
-                y = startY - 15 if startY - 15 > 15 else startY + 15
-                cv2.putText(overlay_buffer, label, (startX, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            if self.objs_draw_mode == 'all':
+                for d in detections:
+                    x1, y1, x2, y2 = d["bbox"]
+                    class_id = d["class_id"]
+                    conf = d["confidence"]
+                    if self.class_names is not None and 0 <= class_id < len(self.class_names):
+                        name = self.class_names[class_id]
+                    else:
+                        name = str(class_id)
+                    label = f"{name}: {conf * 100:.1f}%"
+                    cv2.rectangle(overlay_buffer, (x1, y1), (x2, y2), (0, 255, 0), 1)
+                    ty = y1 - 10 if y1 - 10 > 10 else y1 + 10
+                    cv2.putText(overlay_buffer, label, (x1, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+
+        if self.objs_track_active and self.objs_tracker is not None:
+            ok, box = self.objs_tracker.update(img)
+            if ok:
+                x, y, bw, bh = [int(v) for v in box]
+                clipped = self._clip_bbox_xyxy((x, y, x + bw, y + bh), w, h)
+                if clipped is not None:
+                    self.objs_bbox_xyxy = clipped
+                    self.objs_fail_count = 0
+                else:
+                    self.objs_fail_count += 1
+            else:
+                self.objs_fail_count += 1
+
+        if self.objs_track_active and self.objs_bbox_xyxy is not None:
+            x1, y1, x2, y2 = self.objs_bbox_xyxy
+            tx = (x1 + x2) // 2
+            ty = (y1 + y2) // 2
+
+            if self.objs_draw_mode == 'target':
+                cv2.rectangle(overlay_buffer, (x1, y1), (x2, y2), (255, 255, 0), 2)
+                label = f"TARGET {self.objs_target_class_id}"
+                tlabel_y = y1 - 10 if y1 - 10 > 10 else y1 + 10
+                cv2.putText(overlay_buffer, label, (x1, tlabel_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+            cv2.circle(overlay_buffer, (tx, ty), 3, (255, 255, 0), -1)
+            cv2.line(overlay_buffer, (tx, ty), (center_x, center_y), (255, 0, 0), 1)
+
+            if self.objs_track_enable and (not self.cv_movtion_lock):
+                self.gimbal_track(center_x, center_y, tx, ty, self.objs_track_iterate)
+
+        if self.objs_track_active:
+            if (self.objs_fail_count >= self.objs_lost_fail_count) or (self.objs_last_confirmed_ts > 0 and (time.time() - self.objs_last_confirmed_ts) > self.objs_confirm_timeout_s):
+                self.objs_track_active = False
+                self.objs_tracker = None
+                self.objs_bbox_xyxy = None
+                self.objs_fail_count = 0
+
+        cv2.putText(overlay_buffer, f"DET: {self.objs_detector}", (50, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(overlay_buffer, f"TGT: {self.objs_target_class_id}  DRAW: {self.objs_draw_mode}", (50, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(overlay_buffer, f"TRACK: {int(self.objs_track_active)}  LOCK: {int(self.cv_movtion_lock)}", (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
         self.overlay = overlay_buffer
 

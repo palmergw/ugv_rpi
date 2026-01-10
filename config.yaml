@@ -82,6 +82,27 @@ cv:
   track_color_iterate: 0.023
   track_faces_iterate: 0.045
   track_spd_rate: 60
+  # OBJECTS (DNN) detection + optional target tracking
+  # detector options:
+  # - caffe_voc: existing MobileNet-SSD (VOC 20 classes, does NOT include rabbit)
+  # - tf_openimages: TensorFlow SSD MobileNet v2 (Open Images; includes Rabbit class id 260)
+  objs_detector: caffe_voc
+  objs_conf_threshold: 0.2
+  # For caffe_voc this is the VOC class index; for tf_openimages this is the Open Images numeric class id.
+  objs_target_class_id: 15
+  # Draw mode: "all" draws all detections (only on detect frames), "target" draws only the tracked/selected target.
+  objs_draw_mode: all
+  # Tracking runs only when motion lock is UNLOCKED in the UI (same behavior as face/color tracking).
+  objs_track_enable: true
+  objs_track_iterate: 0.045
+  objs_tracker_type: MOSSE
+  objs_detect_interval_frames: 12
+  objs_confirm_timeout_s: 3.0
+  objs_lost_fail_count: 5
+  objs_iou_confirm_threshold: 0.3
+  # Paths used when objs_detector=tf_openimages
+  objs_tf_model_path: models/openimages/ssd_mobilenet_v2_oid_v4/frozen_inference_graph.pb
+  objs_tf_config_path: models/openimages/ssd_mobilenet_v2_oid_v4/graph.pbtxt
 fb:
   base_light: 115
   base_voltage: 112

@@ -205,7 +205,7 @@ def delete_video():
 
 # Video WebRTC
 # Function to manage connections
-def manage_connections(pc_id):
+def manage_connections(pc_id, pc):
     if len(active_pcs) >= MAX_CONNECTIONS:
         # If maximum connections reached, terminate the oldest connection
         oldest_pc_id = next(iter(active_pcs))
@@ -228,7 +228,7 @@ async def offer_async():
     pc_id = pc_id[:8]
 
     # Manage connections
-    manage_connections(pc_id)
+    manage_connections(pc_id, pc)
 
     # Create and set the local description
     await pc.createOffer(offer)
@@ -486,23 +486,38 @@ def handle_socket_json(json):
 def update_data_websocket_single():
     # {'T':1001,'L':0,'R':0,'r':0,'p':0,'v': 11,'pan':0,'tilt':0}
     try:
-        socket_data = {
-            f['fb']['picture_size']:si.pictures_size,
-            f['fb']['video_size']:  si.videos_size,
-            f['fb']['cpu_load']:    si.cpu_load,
-            f['fb']['cpu_temp']:    si.cpu_temp,
-            f['fb']['ram_usage']:   si.ram,
-            f['fb']['wifi_rssi']:   si.wifi_rssi,
+        def _jsonable(value):
+            try:
+                if hasattr(value, 'item') and callable(value.item):
+                    return value.item()
+            except Exception:
+                pass
+            return value
 
-            f['fb']['led_mode']:    cvf.cv_light_mode,
-            f['fb']['detect_type']: cvf.cv_mode,
-            f['fb']['detect_react']:cvf.detection_reaction_mode,
-            f['fb']['pan_angle']:   cvf.pan_angle,
-            f['fb']['tilt_angle']:  cvf.tilt_angle,
-            f['fb']['base_voltage']:base.base_data['v'],
-            f['fb']['video_fps']:   cvf.video_fps,
-            f['fb']['cv_movtion_mode']: cvf.cv_movtion_lock,
-            f['fb']['base_light']:  base.base_light_status
+        base_voltage = 0
+        try:
+            if isinstance(base.base_data, dict):
+                base_voltage = base.base_data.get('v', 0)
+        except Exception:
+            base_voltage = 0
+
+        socket_data = {
+            f['fb']['picture_size']:_jsonable(si.pictures_size),
+            f['fb']['video_size']:  _jsonable(si.videos_size),
+            f['fb']['cpu_load']:    _jsonable(si.cpu_load),
+            f['fb']['cpu_temp']:    _jsonable(si.cpu_temp),
+            f['fb']['ram_usage']:   _jsonable(si.ram),
+            f['fb']['wifi_rssi']:   _jsonable(si.wifi_rssi),
+
+            f['fb']['led_mode']:    _jsonable(cvf.cv_light_mode),
+            f['fb']['detect_type']: _jsonable(cvf.cv_mode),
+            f['fb']['detect_react']:_jsonable(cvf.detection_reaction_mode),
+            f['fb']['pan_angle']:   _jsonable(cvf.pan_angle),
+            f['fb']['tilt_angle']:  _jsonable(cvf.tilt_angle),
+            f['fb']['base_voltage']:_jsonable(base_voltage),
+            f['fb']['video_fps']:   _jsonable(cvf.video_fps),
+            f['fb']['cv_movtion_mode']: _jsonable(cvf.cv_movtion_lock),
+            f['fb']['base_light']:  _jsonable(base.base_light_status)
         }
         socketio.emit('update', socket_data, namespace='/ctrl')
     except Exception as e:
@@ -558,6 +573,18 @@ def handle_socket_cmd(message):
         print("Error decoding JSON.[app.handle_socket_cmd]")
         return
     cmd_a = float(json_data.get("A", 0))
+    cmd_b = json_data.get("B", 0)
+
+    # Special-case OBJECTS so the UI can pass the desired class id in B.
+    # (Other commands still ignore B/C.)
+    if cmd_a == f['code']['cv_objs']:
+        cvf.set_cv_mode(f['code']['cv_objs'])
+        if hasattr(cvf, 'set_objs_target_class'):
+            cvf.set_objs_target_class(cmd_b)
+        if cmd_a in cmd_feedback_actions:
+            threading.Thread(target=update_data_websocket_single, daemon=True).start()
+        return
+
     if cmd_a in cmd_actions:
         cmd_actions[cmd_a]()
     else:

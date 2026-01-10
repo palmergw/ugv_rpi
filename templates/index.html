@@ -241,7 +241,12 @@
                         <div>  
                             <h2 class="sc_title feed_ct_tt">Advance CV Funcs</h2>
                             <div id="adv_cv_funcs_btn">
-                                <div><button onclick="cmdSend(cv_objs,0,0);" class="ctl_btn">OBJECTS</button></div>
+                                <div><button onclick="cmdSend(cv_objs,getCvObjsTargetClass(),0);" class="ctl_btn">OBJECTS</button></div>
+                                <div>
+                                    <select id="cv_objs_target" class="ctl_btn">
+                                        <option value="-1">Track: None</option>
+                                    </select>
+                                </div>
                                 <div><button onclick="cmdSend(cv_clor,0,0);" class="ctl_btn">COLOR</button></div>
                                 <div><button onclick="cmdSend(mp_hand,0,0);" class="ctl_btn">HAND GS</button></div>
                             </div>
@@ -325,7 +330,7 @@
         <div style="background-image: url('./img/grey/delete.svg');"></div>
     </footer>
     <!-- <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.0/jquery.min.js"></script> -->
-    <script src="./control.js"></script>
+    <script src="./control.js?v=20260110"></script>
     <script src="./main.js"></script>
 </body>
 </html>

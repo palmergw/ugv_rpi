@@ -58,6 +58,11 @@ class OpencvFuncs():
         self.track_spd_rate = f['cv']['track_spd_rate']
         self.track_acc_rate = f['cv']['track_acc_rate']
         self.CMD_GIMBAL = f['cmd_config']['cmd_gimbal_ctrl']
+
+        # Rate-limit gimbal commands to avoid overwhelming the base/serial.
+        self._last_gimbal_cmd_time = 0.0
+        self._last_gimbal_cmd_x = None
+        self._last_gimbal_cmd_y = None
         self.sampling_rad = f['cv']['sampling_rad']
 
         # reaction
@@ -93,6 +98,16 @@ class OpencvFuncs():
                             "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
                             "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
                             "sofa", "train", "tvmonitor"]
+
+        # OBJECTS tracking (UI-selected class id)
+        self.objs_target_class_id = -1
+        self.objs_tracker = None
+        self.objs_tracker_fail_count = 0
+        self.objs_last_bbox = None
+        self.objs_conf_threshold = float(f.get('cv', {}).get('objs_conf_threshold', 0.2))
+        self.objs_lost_max = int(f.get('cv', {}).get('objs_lost_max', 10))
+        self.track_objs_iterate = float(f.get('cv', {}).get('track_objs_iterate', self.track_faces_iterate))
+        self.objs_debug = bool(f.get('cv', {}).get('objs_debug', False))
 
         # mediapipe
         self.mpDraw = mp.solutions.drawing_utils
@@ -230,6 +245,14 @@ class OpencvFuncs():
             ret, buffer = cv2.imencode('.jpg', input_frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.video_quality])
             input_frame = buffer.tobytes()
             return input_frame
+
+        # Normalize to BGR 3-channel frames for consistent OpenCV processing.
+        # Picamera2 XRGB8888 returns 4 channels; drop alpha.
+        try:
+            if isinstance(input_frame, np.ndarray) and input_frame.ndim == 3 and input_frame.shape[2] == 4:
+                input_frame = cv2.cvtColor(input_frame, cv2.COLOR_BGRA2BGR)
+        except Exception as e:
+            print(f"[cv_ctrl.frame_process] frame normalize error: {e}")
 
         # opencv funcs
         if self.cv_mode != f['code']['cv_none']:
@@ -387,9 +410,46 @@ class OpencvFuncs():
             self.video_quality = int(input_quality)
 
     def set_cv_mode(self, input_mode):
+        prev_mode = self.cv_mode
         self.cv_mode = input_mode
         if self.cv_mode == f['code']['cv_none']:
             self.set_video_record_flag = False
+        # Reset OBJECTS tracker when leaving OBJECTS mode.
+        if prev_mode == f['code']['cv_objs'] and self.cv_mode != f['code']['cv_objs']:
+            self._reset_objs_tracker()
+
+    def set_objs_target_class(self, class_id):
+        try:
+            class_id_int = int(float(class_id))
+        except Exception:
+            class_id_int = -1
+        self.objs_target_class_id = class_id_int
+        self._reset_objs_tracker()
+
+    def _reset_objs_tracker(self):
+        self.objs_tracker = None
+        self.objs_tracker_fail_count = 0
+        self.objs_last_bbox = None
+
+    def _create_objs_tracker(self):
+        # Prefer CSRT for robustness; fall back to other trackers if unavailable.
+        candidates = [
+            ('TrackerCSRT_create', None),
+            ('TrackerKCF_create', None),
+            ('TrackerMOSSE_create', None),
+        ]
+        for name, _ in candidates:
+            if hasattr(cv2, name):
+                try:
+                    return getattr(cv2, name)()
+                except Exception:
+                    pass
+            if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, name):
+                try:
+                    return getattr(cv2.legacy, name)()
+                except Exception:
+                    pass
+        return None
 
     def set_detection_reaction(self, input_reaction):
         self.detection_reaction_mode = input_reaction
@@ -465,7 +525,26 @@ class OpencvFuncs():
             gimbal_acc = 1
         if gimbal_spd < 1:
             gimbal_spd = 1
-        self.base_ctrl.base_json_ctrl({"T":self.CMD_GIMBAL,"X":self.pan_angle,"Y":self.tilt_angle,"SPD":gimbal_spd,"ACC":gimbal_acc})
+
+        # Firmware is typically happier with integer angles, and sending too fast can
+        # overwhelm the serial link. Rate-limit and quantize.
+        now = time.time()
+        cmd_x = int(round(self.pan_angle))
+        cmd_y = int(round(self.tilt_angle))
+        gimbal_spd = int(min(gimbal_spd, 300))
+        gimbal_acc = int(min(gimbal_acc, 50))
+
+        should_send = (now - self._last_gimbal_cmd_time) >= 0.05
+        if self._last_gimbal_cmd_x is None or self._last_gimbal_cmd_y is None:
+            should_send = True
+        elif abs(cmd_x - self._last_gimbal_cmd_x) >= 1 or abs(cmd_y - self._last_gimbal_cmd_y) >= 1:
+            should_send = True
+
+        if should_send:
+            self.base_ctrl.base_json_ctrl({"T": self.CMD_GIMBAL, "X": cmd_x, "Y": cmd_y, "SPD": gimbal_spd, "ACC": gimbal_acc})
+            self._last_gimbal_cmd_time = now
+            self._last_gimbal_cmd_x = cmd_x
+            self._last_gimbal_cmd_y = cmd_y
         return distance
 
     def cv_detect_faces(self, img):
@@ -532,25 +611,121 @@ class OpencvFuncs():
         overlay_buffer = np.zeros_like(img)
         cv2.putText(overlay_buffer, 'CV_OBJS', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        height, width = img.shape[:2]
+        center_x, center_y = width // 2, height // 2
 
-        (h, w) = img.shape[:2]
-        blob = cv2.dnn.blobFromImage(cv2.resize(img, (300, 300)), 0.007843, (300, 300), 127.5)
+        target_id = self.objs_target_class_id
+        target_name = None
+        if 0 < target_id < len(self.class_names):
+            target_name = self.class_names[target_id]
+
+        if target_name:
+            cv2.putText(overlay_buffer, f'TARGET: {target_id} {target_name}', (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        else:
+            cv2.putText(overlay_buffer, 'TARGET: None', (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        lock_text = 'LOCKED' if self.cv_movtion_lock else 'UNLOCKED'
+        cv2.putText(overlay_buffer, lock_text, (50, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        if self.objs_debug:
+            tracker_text = 'ON' if self.objs_tracker is not None else 'OFF'
+            cv2.putText(overlay_buffer, f'TRK:{tracker_text}  FAIL:{self.objs_tracker_fail_count}', (50, 140),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(overlay_buffer, f'PAN:{self.pan_angle:.1f}  TILT:{self.tilt_angle:.1f}', (50, 170),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            if self._last_gimbal_cmd_x is not None and self._last_gimbal_cmd_y is not None:
+                cv2.putText(overlay_buffer, f'CMD X:{self._last_gimbal_cmd_x} Y:{self._last_gimbal_cmd_y}', (50, 200),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        # If we have an active tracker, update it and (optionally) drive the gimbal.
+        if target_name and self.objs_tracker is not None:
+            try:
+                ok, bbox = self.objs_tracker.update(img)
+            except Exception:
+                ok, bbox = False, None
+
+            if ok and bbox is not None:
+                x, y, w, h = [int(v) for v in bbox]
+                x = max(0, min(x, width - 1))
+                y = max(0, min(y, height - 1))
+                w = max(1, min(w, width - x))
+                h = max(1, min(h, height - y))
+                self.objs_last_bbox = (x, y, w, h)
+                self.objs_tracker_fail_count = 0
+
+                tx = x + w // 2
+                ty = y + h // 2
+                cv2.rectangle(overlay_buffer, (x, y), (x + w, y + h), (0, 255, 0), 3)
+                cv2.putText(overlay_buffer, 'TRACK', (x, max(15, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+                if not self.cv_movtion_lock:
+                    self.gimbal_track(center_x, center_y, tx, ty, self.track_objs_iterate)
+
+                self.overlay = overlay_buffer
+                return
+
+            self.objs_tracker_fail_count += 1
+            if self.objs_tracker_fail_count >= self.objs_lost_max:
+                self._reset_objs_tracker()
+
+        # No active track (or target is None): run DNN detection.
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        (h, w) = img_rgb.shape[:2]
+        blob = cv2.dnn.blobFromImage(cv2.resize(img_rgb, (300, 300)), 0.007843, (300, 300), 127.5)
         self.net.setInput(blob)
         detections = self.net.forward()
+
+        best_target = None  # (confidence, (startX, startY, endX, endY))
 
         for i in range(0, detections.shape[2]):
             confidence = detections[0, 0, i, 2]
 
-            if confidence > 0.2:
+            if confidence > self.objs_conf_threshold:
                 idx = int(detections[0, 0, i, 1])
                 box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
                 (startX, startY, endX, endY) = box.astype("int")
+
+                startX = max(0, min(startX, width - 1))
+                startY = max(0, min(startY, height - 1))
+                endX = max(0, min(endX, width - 1))
+                endY = max(0, min(endY, height - 1))
+                if endX <= startX or endY <= startY:
+                    continue
 
                 label = "{}: {:.2f}%".format(self.class_names[idx], confidence * 100)
                 cv2.rectangle(overlay_buffer, (startX, startY), (endX, endY), (0, 255, 0), 2)
                 y = startY - 15 if startY - 15 > 15 else startY + 15
                 cv2.putText(overlay_buffer, label, (startX, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                if target_name and idx == target_id:
+                    if best_target is None or confidence > best_target[0]:
+                        best_target = (confidence, (startX, startY, endX, endY))
+
+        # If a target class is selected and we found one, lock onto it.
+        if target_name and best_target is not None:
+            (_, (startX, startY, endX, endY)) = best_target
+            bbox_w = max(1, endX - startX)
+            bbox_h = max(1, endY - startY)
+            init_bbox = (float(startX), float(startY), float(bbox_w), float(bbox_h))
+
+            tracker = self._create_objs_tracker()
+            if tracker is not None:
+                try:
+                    ok = tracker.init(img, init_bbox)
+                except Exception:
+                    ok = False
+                if ok:
+                    self.objs_tracker = tracker
+                    self.objs_tracker_fail_count = 0
+                    self.objs_last_bbox = (int(startX), int(startY), int(bbox_w), int(bbox_h))
+
+            tx = startX + bbox_w // 2
+            ty = startY + bbox_h // 2
+            cv2.rectangle(overlay_buffer, (startX, startY), (endX, endY), (0, 255, 0), 3)
+            cv2.putText(overlay_buffer, 'LOCK', (startX, max(15, startY - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            if not self.cv_movtion_lock:
+                self.gimbal_track(center_x, center_y, tx, ty, self.track_objs_iterate)
 
         self.overlay = overlay_buffer
 

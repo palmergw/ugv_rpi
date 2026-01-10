@@ -178,9 +178,34 @@ class BaseController:
 
 
 	def process_commands(self):
+		def _to_builtin(obj):
+			# Convert numpy scalars (and similar) to native Python types, recursively.
+			try:
+				if hasattr(obj, 'item') and callable(obj.item):
+					return obj.item()
+			except Exception:
+				pass
+			if isinstance(obj, dict):
+				return {k: _to_builtin(v) for k, v in obj.items()}
+			if isinstance(obj, list):
+				return [_to_builtin(v) for v in obj]
+			if isinstance(obj, tuple):
+				return tuple(_to_builtin(v) for v in obj)
+			return obj
+
 		while True:
 			data = self.command_queue.get()
-			self.ser.write((json.dumps(data) + '\n').encode("utf-8"))
+			try:
+				payload = json.dumps(data)
+			except TypeError:
+				payload = json.dumps(_to_builtin(data))
+			except Exception as e:
+				print(f"[base_ctrl.process_commands] json encode error: {e}")
+				continue
+			try:
+				self.ser.write((payload + '\n').encode("utf-8"))
+			except Exception as e:
+				print(f"[base_ctrl.process_commands] serial write error: {e}")
 
 
 	def base_json_ctrl(self, input_json):

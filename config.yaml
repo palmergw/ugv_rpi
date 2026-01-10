@@ -16,7 +16,7 @@ base_config:
   add_osd: false
   extra_sensor: false
   main_type: 2
-  module_type: 0
+  module_type: 2
   robot_name: UGV Rover
   sbc_version: 0.93
   use_lidar: false
@@ -67,6 +67,7 @@ code:
   zoom_x4: 10106
 cv:
   aimed_error: 8
+  objs_debug: false
   color_lower:
   - 101
   - 50

@@ -69,6 +69,8 @@ fetch('/config')
       mp_face = yamlObject.code.mp_face;
       mp_pose = yamlObject.code.mp_pose;
 
+    initCvObjsTargetSelect();
+
       re_none = yamlObject.code.re_none;
       re_capt = yamlObject.code.re_capt;
       re_reco = yamlObject.code.re_reco;
@@ -111,6 +113,74 @@ fetch('/config')
   .catch(error => {
     console.error('Error fetching YAML file:', error);
   });
+
+function getCvObjsTargetClass() {
+    var sel = document.getElementById('cv_objs_target');
+    if (!sel) {
+        return 0;
+    }
+    var val = parseInt(sel.value);
+    if (isNaN(val)) {
+        return 0;
+    }
+    return val;
+}
+
+function initCvObjsTargetSelect() {
+    var sel = document.getElementById('cv_objs_target');
+    if (!sel) {
+        return;
+    }
+    if (sel.dataset && sel.dataset.initialized === '1') {
+        return;
+    }
+    if (sel.dataset) {
+        sel.dataset.initialized = '1';
+    }
+
+    // MobileNet-SSD (VOC) class IDs used by cv_ctrl.py (0 is background)
+    var vocClassNames = [
+        'background',
+        'aeroplane',
+        'bicycle',
+        'bird',
+        'boat',
+        'bottle',
+        'bus',
+        'car',
+        'cat',
+        'chair',
+        'cow',
+        'diningtable',
+        'dog',
+        'horse',
+        'motorbike',
+        'person',
+        'pottedplant',
+        'sheep',
+        'sofa',
+        'train',
+        'tvmonitor'
+    ];
+
+    // Rebuild options (keeps UI in sync if HTML changes)
+    sel.innerHTML = '';
+    var optNone = document.createElement('option');
+    optNone.value = '-1';
+    optNone.textContent = 'Track: None';
+    sel.appendChild(optNone);
+
+    for (var i = 1; i < vocClassNames.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = i + ' ' + vocClassNames[i];
+        sel.appendChild(opt);
+    }
+
+    sel.addEventListener('change', function () {
+        cmdSend(cv_objs, getCvObjsTargetClass(), 0);
+    });
+}
 
 //update photos list
 function generatePhotoLink(imgname) {
@@ -730,7 +800,8 @@ let lastTimeCmdSend = Date.now();;
 let lastArgsCmdSend;
 function cmdSend(inputA, inputB, inputC){
     const now = Date.now();
-    if (!lastArgsCmdSend || inputA != lastArgsCmdSend || now - lastTimeCmdSend >= 10) {
+    const argsKey = JSON.stringify([inputA, inputB, inputC]);
+    if (!lastArgsCmdSend || argsKey != lastArgsCmdSend || now - lastTimeCmdSend >= 10) {
         var jsonData = {
             "A":inputA,
             "B":inputB,
@@ -738,7 +809,7 @@ function cmdSend(inputA, inputB, inputC){
         };
         console.log(jsonData);
         socket.send(JSON.stringify(jsonData));
-        lastArgsCmdSend = inputA;
+        lastArgsCmdSend = argsKey;
         lastTimeCmdSend = now;
     }
 }

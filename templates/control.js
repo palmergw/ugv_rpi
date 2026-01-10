@@ -138,44 +138,78 @@ function initCvObjsTargetSelect() {
         sel.dataset.initialized = '1';
     }
 
-    // MobileNet-SSD (VOC) class IDs used by cv_ctrl.py (0 is background)
-    var vocClassNames = [
-        'background',
-        'aeroplane',
-        'bicycle',
-        'bird',
-        'boat',
-        'bottle',
-        'bus',
-        'car',
-        'cat',
-        'chair',
-        'cow',
-        'diningtable',
-        'dog',
-        'horse',
-        'motorbike',
-        'person',
-        'pottedplant',
-        'sheep',
-        'sofa',
-        'train',
-        'tvmonitor'
-    ];
+    function buildOptionsFromList(items) {
+        sel.innerHTML = '';
 
-    // Rebuild options (keeps UI in sync if HTML changes)
-    sel.innerHTML = '';
-    var optNone = document.createElement('option');
-    optNone.value = '-1';
-    optNone.textContent = 'Track: None';
-    sel.appendChild(optNone);
+        var hasNone = false;
+        for (var j = 0; j < items.length; j++) {
+            if (parseInt(items[j].id) === -1) {
+                hasNone = true;
+                break;
+            }
+        }
+        if (!hasNone) {
+            items = [{ id: -1, label: 'None' }].concat(items);
+        }
 
-    for (var i = 1; i < vocClassNames.length; i++) {
-        var opt = document.createElement('option');
-        opt.value = String(i);
-        opt.textContent = i + ' ' + vocClassNames[i];
-        sel.appendChild(opt);
+        for (var i = 0; i < items.length; i++) {
+            var id = parseInt(items[i].id);
+            var label = String(items[i].label || items[i].name || id);
+            var opt = document.createElement('option');
+            opt.value = String(id);
+            if (id === -1) {
+                opt.textContent = 'Track: None';
+            } else {
+                opt.textContent = id + ' ' + label;
+            }
+            sel.appendChild(opt);
+        }
     }
+
+    function buildVocFallback() {
+        // MobileNet-SSD (VOC) class IDs (0 is background)
+        var vocClassNames = [
+            'background',
+            'aeroplane',
+            'bicycle',
+            'bird',
+            'boat',
+            'bottle',
+            'bus',
+            'car',
+            'cat',
+            'chair',
+            'cow',
+            'diningtable',
+            'dog',
+            'horse',
+            'motorbike',
+            'person',
+            'pottedplant',
+            'sheep',
+            'sofa',
+            'train',
+            'tvmonitor'
+        ];
+        var items = [];
+        for (var i = 1; i < vocClassNames.length; i++) {
+            items.push({ id: i, label: vocClassNames[i] });
+        }
+        buildOptionsFromList(items);
+    }
+
+    fetch('/objs_labels')
+        .then(function (resp) { return resp.json(); })
+        .then(function (items) {
+            if (!items || !items.length) {
+                buildVocFallback();
+                return;
+            }
+            buildOptionsFromList(items);
+        })
+        .catch(function () {
+            buildVocFallback();
+        });
 
     sel.addEventListener('change', function () {
         cmdSend(cv_objs, getCvObjsTargetClass(), 0);

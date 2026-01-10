@@ -157,6 +157,14 @@ def get_config():
         yaml_content = file.read()
     return yaml_content
 
+@app.route('/objs_labels')
+def get_objs_labels():
+    try:
+        return jsonify(cvf.get_objs_label_options())
+    except Exception as e:
+        print(f"[/objs_labels] error: {e}")
+        return jsonify([])
+
 # get pictures and videos.
 @app.route('/<path:filename>')
 def serve_static(filename):

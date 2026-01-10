@@ -67,6 +67,32 @@ code:
   zoom_x4: 10106
 cv:
   aimed_error: 8
+  # OBJECTS mode configuration:
+  # - objs_preset: "voc" (default) exposes VOC classes; "wildlife" exposes debug targets (deer/animal/human/vehicle)
+  objs_preset: voc
+  # Detector configuration (OpenCV DNN). Defaults match the current VOC Caffe model.
+  objs_detector:
+    framework: caffe
+    config: models/deploy.prototxt
+    model: models/mobilenet_iter_73000.caffemodel
+    input_size: [300, 300]
+    scale: 0.007843
+    mean: 127.5
+    swap_rb: false
+  # Wildlife preset expects the detector to output SSD-style class IDs mapped here.
+  # Provide these IDs for your wildlife detector model.
+  wildlife:
+    class_map:
+      animal: 0
+      human: 0
+      vehicle: 0
+  # Optional deer classifier (binary deer-vs-not) used when objs_preset=wildlife and target=deer.
+  deer_classifier:
+    tflite_model: null
+    threshold: 0.5
+    input_size: [224, 224]
+    rgb: true
+    scale: 0.00392156862745098
   objs_debug: false
   color_lower:
   - 101

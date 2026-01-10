@@ -16,6 +16,10 @@ This project includes an **OBJECTS** CV mode based on MobileNet-SSD (VOC) object
 
 To stop tracking, set the dropdown to **Track: None**, or press **LOCK**.
 
+## Target-only overlay
+
+When a target is selected (anything except **Track: None**), the video overlay only draws boxes for that selected target. This makes it easier to confirm the robot is tracking the right thing.
+
 ## VOC class IDs (MobileNet-SSD)
 
 The dropdown values map to these detector class IDs:
@@ -47,7 +51,28 @@ The dropdown values map to these detector class IDs:
 
 - UI sends `/ctrl` messages of the form `{A: cv_objs, B: classId, C: 0}`.
 - Backend reads `B` only for `cv_objs` and calls `set_objs_target_class()`.
+- UI dropdown options are fetched from `/objs_labels` (falls back to VOC in the browser if unavailable).
 - CV pipeline uses an OpenCV tracker (prefers CSRT; falls back to KCF/MOSSE if available).
+
+## Wildlife preset (deer)
+
+By default, OBJECTS uses the VOC label set (`cv.objs_preset: voc`).
+
+To prepare for deer-style tracking, set:
+
+- `cv.objs_preset: wildlife`
+
+This changes the dropdown targets to debug-friendly options:
+
+- `1 deer`
+- `2 animal`
+- `3 human`
+- `4 vehicle`
+
+The wildlife preset expects you to configure a detector model and (optionally) a deer-vs-not classifier in `config.yaml`:
+
+- `cv.wildlife.class_map` maps your detector’s class IDs to `animal/human/vehicle`.
+- `cv.deer_classifier.tflite_model` can be used to filter `animal` boxes down to `deer`.
 
 ## Debug overlay
 

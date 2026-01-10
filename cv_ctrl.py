@@ -92,12 +92,55 @@ class OpencvFuncs():
             self.color_upper = np.array(f['cv']['color_upper'])
         self.track_color_iterate = f['cv']['track_color_iterate']
 
-        # cv_dnn_objects
-        self.net = cv2.dnn.readNetFromCaffe(thisPath + '/models/deploy.prototxt', thisPath + '/models/mobilenet_iter_73000.caffemodel')
-        self.class_names = ["background", "aeroplane", "bicycle", "bird", "boat",
-                            "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
-                            "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
-                            "sofa", "train", "tvmonitor"]
+        # OBJECTS model + labels
+        # Default remains the existing MobileNet-SSD VOC Caffe model, but the config
+        # can override the backend label set and/or the DNN model.
+        self.objs_preset = str(f.get('cv', {}).get('objs_preset', 'voc'))
+
+        self.class_names = [
+            "background", "aeroplane", "bicycle", "bird", "boat",
+            "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
+            "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
+            "sofa", "train", "tvmonitor",
+        ]
+
+        objs_detector_cfg = f.get('cv', {}).get('objs_detector', {}) or {}
+        detector_framework = str(objs_detector_cfg.get('framework', 'caffe')).lower()
+        detector_config = str(objs_detector_cfg.get('config', 'models/deploy.prototxt'))
+        detector_model = str(objs_detector_cfg.get('model', 'models/mobilenet_iter_73000.caffemodel'))
+
+        # SSD-style preprocessing defaults (matches the existing Caffe model)
+        self.objs_input_size = tuple(objs_detector_cfg.get('input_size', [300, 300]))
+        self.objs_blob_scale = float(objs_detector_cfg.get('scale', 0.007843))
+        self.objs_blob_mean = objs_detector_cfg.get('mean', 127.5)
+        self.objs_swap_rb = bool(objs_detector_cfg.get('swap_rb', False))
+
+        detector_config_path = detector_config
+        detector_model_path = detector_model
+        if not os.path.isabs(detector_config_path):
+            detector_config_path = os.path.join(thisPath, detector_config_path)
+        if not os.path.isabs(detector_model_path):
+            detector_model_path = os.path.join(thisPath, detector_model_path)
+
+        if detector_framework == 'tensorflow' or detector_framework == 'tf':
+            self.net = cv2.dnn.readNetFromTensorflow(detector_model_path, detector_config_path)
+        else:
+            self.net = cv2.dnn.readNetFromCaffe(detector_config_path, detector_model_path)
+
+        # Label options exposed to the UI dropdown.
+        # - voc: exposes VOC class IDs
+        # - wildlife: exposes debug targets (deer/animal/human/vehicle) for two-stage pipelines
+        self._objs_label_map = {-1: None}
+        if self.objs_preset == 'wildlife':
+            self._objs_label_map.update({
+                1: 'deer',
+                2: 'animal',
+                3: 'human',
+                4: 'vehicle',
+            })
+        else:
+            for i, name in enumerate(self.class_names):
+                self._objs_label_map[i] = name
 
         # OBJECTS tracking (UI-selected class id)
         self.objs_target_class_id = -1
@@ -108,6 +151,100 @@ class OpencvFuncs():
         self.objs_lost_max = int(f.get('cv', {}).get('objs_lost_max', 10))
         self.track_objs_iterate = float(f.get('cv', {}).get('track_objs_iterate', self.track_faces_iterate))
         self.objs_debug = bool(f.get('cv', {}).get('objs_debug', False))
+
+        # Wildlife/deer optional classifier (for objs_preset: wildlife)
+        self._deer_classifier = None
+        self._deer_classifier_enabled = False
+        self._deer_classifier_threshold = 0.5
+        self._deer_classifier_input_size = (224, 224)
+        self._deer_classifier_rgb = True
+        self._deer_classifier_scale = 1.0 / 255.0
+        deer_cfg = f.get('cv', {}).get('deer_classifier', {}) or {}
+        deer_model_path = deer_cfg.get('tflite_model', None)
+        if deer_model_path:
+            try:
+                if not os.path.isabs(deer_model_path):
+                    deer_model_path = os.path.join(thisPath, str(deer_model_path))
+                self._deer_classifier_threshold = float(deer_cfg.get('threshold', 0.5))
+                self._deer_classifier_input_size = tuple(deer_cfg.get('input_size', [224, 224]))
+                self._deer_classifier_rgb = bool(deer_cfg.get('rgb', True))
+                self._deer_classifier_scale = float(deer_cfg.get('scale', 1.0 / 255.0))
+
+                try:
+                    from tflite_runtime.interpreter import Interpreter
+                except Exception:
+                    from tensorflow.lite.python.interpreter import Interpreter
+
+                self._deer_classifier = Interpreter(model_path=deer_model_path)
+                self._deer_classifier.allocate_tensors()
+                self._deer_classifier_input = self._deer_classifier.get_input_details()[0]
+                self._deer_classifier_output = self._deer_classifier.get_output_details()[0]
+                self._deer_classifier_enabled = True
+            except Exception as e:
+                print(f"[cv_ctrl] deer classifier init failed: {e}")
+                self._deer_classifier = None
+                self._deer_classifier_enabled = False
+
+        wildlife_cfg = f.get('cv', {}).get('wildlife', {}) or {}
+        self._wildlife_class_map = wildlife_cfg.get('class_map', {}) or {}
+
+
+    def get_objs_label_options(self):
+        # Returns a list of {id, label} for the web UI dropdown.
+        options = [{"id": -1, "label": "None"}]
+        if self.objs_preset == 'wildlife':
+            options.extend([
+                {"id": 1, "label": "deer"},
+                {"id": 2, "label": "animal"},
+                {"id": 3, "label": "human"},
+                {"id": 4, "label": "vehicle"},
+            ])
+            return options
+
+        # VOC preset
+        for i in range(1, len(self.class_names)):
+            options.append({"id": i, "label": self.class_names[i]})
+        return options
+
+    def _get_target_name(self, target_id):
+        try:
+            tid = int(target_id)
+        except Exception:
+            return None
+
+        if self.objs_preset == 'wildlife':
+            if tid in (1, 2, 3, 4):
+                return self._objs_label_map.get(tid, None)
+            return None
+
+        # VOC preset: valid detector IDs are 1..N-1 (0 is background)
+        if 0 < tid < len(self.class_names):
+            return self._objs_label_map.get(tid, None)
+        return None
+
+    def _classify_deer(self, crop_bgr):
+        if not self._deer_classifier_enabled or self._deer_classifier is None:
+            return None
+        try:
+            img = crop_bgr
+            if self._deer_classifier_rgb:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = cv2.resize(img, self._deer_classifier_input_size)
+            x = img.astype(np.float32) * float(self._deer_classifier_scale)
+            x = np.expand_dims(x, axis=0)
+            self._deer_classifier.set_tensor(self._deer_classifier_input['index'], x)
+            self._deer_classifier.invoke()
+            y = self._deer_classifier.get_tensor(self._deer_classifier_output['index'])
+            # Accept common binary output shapes: [1], [1,1], [1,2]
+            y = np.array(y).reshape(-1)
+            if y.size == 1:
+                return float(y[0])
+            if y.size >= 2:
+                # assume [p_not_deer, p_deer]
+                return float(y[1])
+        except Exception:
+            return None
+        return None
 
         # mediapipe
         self.mpDraw = mp.solutions.drawing_utils
@@ -615,9 +752,8 @@ class OpencvFuncs():
         center_x, center_y = width // 2, height // 2
 
         target_id = self.objs_target_class_id
-        target_name = None
-        if 0 < target_id < len(self.class_names):
-            target_name = self.class_names[target_id]
+        target_name = self._get_target_name(target_id)
+        target_selected = target_name is not None
 
         if target_name:
             cv2.putText(overlay_buffer, f'TARGET: {target_id} {target_name}', (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
@@ -669,23 +805,51 @@ class OpencvFuncs():
                 self._reset_objs_tracker()
 
         # No active track (or target is None): run DNN detection.
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # Two presets:
+        # - voc (default): MobileNet-SSD VOC class IDs
+        # - wildlife: debug targets (deer/animal/human/vehicle), using a detector class map
+        (h, w) = img.shape[:2]
 
-        (h, w) = img_rgb.shape[:2]
-        blob = cv2.dnn.blobFromImage(cv2.resize(img_rgb, (300, 300)), 0.007843, (300, 300), 127.5)
+        blob = cv2.dnn.blobFromImage(
+            cv2.resize(img, self.objs_input_size),
+            self.objs_blob_scale,
+            self.objs_input_size,
+            self.objs_blob_mean,
+            swapRB=self.objs_swap_rb,
+        )
         self.net.setInput(blob)
         detections = self.net.forward()
 
         best_target = None  # (confidence, (startX, startY, endX, endY))
 
-        for i in range(0, detections.shape[2]):
-            confidence = detections[0, 0, i, 2]
+        if self.objs_preset == 'wildlife':
+            # Detector is expected to output SSD-style detections with class IDs that
+            # are mapped via cv.wildlife.class_map (animal/human/vehicle).
+            animal_id = int(self._wildlife_class_map.get('animal', 0) or 0)
+            human_id = int(self._wildlife_class_map.get('human', self._wildlife_class_map.get('person', 0)) or 0)
+            vehicle_id = int(self._wildlife_class_map.get('vehicle', 0) or 0)
 
-            if confidence > self.objs_conf_threshold:
+            allowed_detector_ids = None
+            if target_id == 1:  # deer
+                allowed_detector_ids = {animal_id} if animal_id > 0 else set()
+            elif target_id == 2:  # animal
+                allowed_detector_ids = {animal_id} if animal_id > 0 else set()
+            elif target_id == 3:  # human
+                allowed_detector_ids = {human_id} if human_id > 0 else set()
+            elif target_id == 4:  # vehicle
+                allowed_detector_ids = {vehicle_id} if vehicle_id > 0 else set()
+
+            for i in range(0, detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                if confidence <= self.objs_conf_threshold:
+                    continue
+
                 idx = int(detections[0, 0, i, 1])
+                if allowed_detector_ids is not None and idx not in allowed_detector_ids:
+                    continue
+
                 box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
                 (startX, startY, endX, endY) = box.astype("int")
-
                 startX = max(0, min(startX, width - 1))
                 startY = max(0, min(startY, height - 1))
                 endX = max(0, min(endX, width - 1))
@@ -693,14 +857,60 @@ class OpencvFuncs():
                 if endX <= startX or endY <= startY:
                     continue
 
-                label = "{}: {:.2f}%".format(self.class_names[idx], confidence * 100)
+                deer_prob = None
+                if target_id == 1:
+                    crop = img[startY:endY, startX:endX]
+                    deer_prob = self._classify_deer(crop)
+                    if deer_prob is None:
+                        # Classifier not configured; best-effort treat as candidate.
+                        deer_ok = True
+                    else:
+                        deer_ok = deer_prob >= self._deer_classifier_threshold
+                    if not deer_ok:
+                        continue
+
+                # Hide non-target boxes: wildlife preset only ever draws target-filtered detections.
+                label_bits = [target_name or 'target']
+                if deer_prob is not None:
+                    label_bits.append(f"{deer_prob*100:.1f}%")
+                label = ": ".join(label_bits)
                 cv2.rectangle(overlay_buffer, (startX, startY), (endX, endY), (0, 255, 0), 2)
                 y = startY - 15 if startY - 15 > 15 else startY + 15
                 cv2.putText(overlay_buffer, label, (startX, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                if target_name and idx == target_id:
+                if target_id != -1:
                     if best_target is None or confidence > best_target[0]:
                         best_target = (confidence, (startX, startY, endX, endY))
+
+        else:
+            for i in range(0, detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+
+                if confidence > self.objs_conf_threshold:
+                    idx = int(detections[0, 0, i, 1])
+                    box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                    (startX, startY, endX, endY) = box.astype("int")
+
+                    startX = max(0, min(startX, width - 1))
+                    startY = max(0, min(startY, height - 1))
+                    endX = max(0, min(endX, width - 1))
+                    endY = max(0, min(endY, height - 1))
+                    if endX <= startX or endY <= startY:
+                        continue
+
+                    # When a target is selected, hide all non-target boxes for clarity.
+                    if target_selected and idx != target_id:
+                        continue
+
+                    label_name = self.class_names[idx] if 0 <= idx < len(self.class_names) else str(idx)
+                    label = "{}: {:.2f}%".format(label_name, confidence * 100)
+                    cv2.rectangle(overlay_buffer, (startX, startY), (endX, endY), (0, 255, 0), 2)
+                    y = startY - 15 if startY - 15 > 15 else startY + 15
+                    cv2.putText(overlay_buffer, label, (startX, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                    if target_name and idx == target_id:
+                        if best_target is None or confidence > best_target[0]:
+                            best_target = (confidence, (startX, startY, endX, endY))
 
         # If a target class is selected and we found one, lock onto it.
         if target_name and best_target is not None:

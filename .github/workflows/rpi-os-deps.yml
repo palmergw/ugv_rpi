@@ -1,0 +1,43 @@
+name: Raspberry Pi OS dependency resolution
+
+on:
+  pull_request:
+    paths:
+      - requirements.txt
+      - setup.sh
+      - docker/rpi-os-deps/Dockerfile
+      - scripts/test-rpi-os-deps.sh
+      - .github/workflows/rpi-os-deps.yml
+  workflow_dispatch:
+    inputs:
+      codename:
+        description: Raspberry Pi OS/Debian codename to test
+        required: false
+        default: bookworm
+  schedule:
+    - cron: '17 6 * * 1'
+
+jobs:
+  dependency-resolution:
+    name: ${{ matrix.codename }} / linux-arm64
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # bookworm is the currently supported setup.sh target; trixie tracks the
+        # latest/next Raspberry Pi OS dependency set so breakage is visible early.
+        codename: [bookworm, trixie]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU for arm64 Raspberry Pi OS builds
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build dependency-resolution harness
+        run: scripts/test-rpi-os-deps.sh "${{ matrix.codename }}"

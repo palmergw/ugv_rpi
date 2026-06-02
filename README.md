@@ -55,6 +55,14 @@ You can clone this repository from Waveshare's GitHub to your local machine.
     sudo chmod +x autorun.sh
 ### Install app (it'll take a while before finish)
     sudo ./setup.sh
+
+### Validate dependency resolution in Docker
+Before changing `setup.sh` or `requirements.txt`, run the Raspberry Pi OS dependency harness to catch apt or pip drift in a reproducible arm64 container:
+
+    scripts/test-raspios-deps.sh
+
+See `docker/raspios-dependency-harness/README.md` for the Dockerfile, CI workflow, failure logs, and iteration path.
+
 ### Autorun setup
     ./autorun.sh
 ### AccessPopup installation

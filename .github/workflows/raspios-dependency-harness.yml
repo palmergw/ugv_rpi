@@ -1,0 +1,38 @@
+name: Raspberry Pi OS dependency harness
+
+on:
+  pull_request:
+    paths:
+      - setup.sh
+      - requirements.txt
+      - docker/raspios-dependency-harness/**
+      - scripts/test-raspios-deps.sh
+      - .github/workflows/raspios-dependency-harness.yml
+  workflow_dispatch:
+
+jobs:
+  setup-sh-dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU for arm64 Docker builds
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run setup.sh dependency harness
+        run: scripts/test-raspios-deps.sh
+
+      - name: Upload harness log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raspios-dependency-harness-log
+          path: artifacts/raspios-dependency-harness/docker-build.log
+          if-no-files-found: ignore

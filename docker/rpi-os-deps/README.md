@@ -15,8 +15,9 @@ real hardware.
   `setup.sh`.
 - Runs `pip install -r requirements.txt` so dependency resolver or wheel/build
   failures are caught in CI.
-- Also runs against `trixie` in GitHub Actions to track the latest/next
-  Raspberry Pi OS dependency set.
+- Also runs an experimental `trixie` GitHub Actions job to track the latest/next
+  Raspberry Pi OS dependency set without failing current-release pull requests
+  when upstream projects have not published Python 3.13 arm64 wheels yet.
 
 The harness does not run the full `setup.sh` because that script intentionally
 edits `/boot`, disables Bluetooth services, copies udev/audio files into system
@@ -50,4 +51,6 @@ inputs, weekly on Monday, and on manual dispatch. The matrix tests both:
 - `bookworm`: the currently supported Raspberry Pi OS/Debian 12 target reflected
   in `requirements.txt`.
 - `trixie`: the latest/next Raspberry Pi OS/Debian 13 target for early warning
-  when pinned packages stop resolving.
+  when pinned packages stop resolving. This job is marked experimental and does
+  not fail the pull request while packages such as `mediapipe` lack Python 3.13
+  linux/arm64 wheels on PyPI.

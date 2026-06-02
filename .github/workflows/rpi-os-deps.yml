@@ -25,8 +25,14 @@ jobs:
       fail-fast: false
       matrix:
         # bookworm is the currently supported setup.sh target; trixie tracks the
-        # latest/next Raspberry Pi OS dependency set so breakage is visible early.
-        codename: [bookworm, trixie]
+        # latest/next Raspberry Pi OS dependency set so breakage is visible early
+        # without failing current-release PRs while upstream wheels are missing.
+        include:
+          - codename: bookworm
+            experimental: false
+          - codename: trixie
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

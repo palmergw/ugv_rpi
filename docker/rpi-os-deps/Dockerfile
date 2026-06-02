@@ -59,6 +59,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       libcamera-dev \
       libdbus-1-dev \
       libcairo2-dev \
+      libcups2-dev \
       libgirepository1.0-dev \
       libglib2.0-dev \
       libjpeg-dev \
@@ -92,7 +93,7 @@ text = Path('setup.sh').read_text()
 logical = re.sub(r'\\\n\s*', ' ', text)
 required = {
     'libopenblas-dev', 'libatlas3-base', 'libcamera-dev', 'python3-opencv',
-    'portaudio19-dev', 'libsmbclient-dev', 'libcap-dev', 'libxml2-dev', 'libxslt1-dev',
+    'portaudio19-dev', 'libsmbclient-dev', 'libcap-dev', 'libxml2-dev', 'libxslt1-dev', 'libcups2-dev',
     'arandr', 'util-linux', 'procps', 'hostapd',
     'iproute2', 'iw', 'haveged', 'dnsmasq', 'iptables', 'espeak', 'ffmpeg',
     'libavformat-dev', 'libavcodec-dev', 'libavdevice-dev', 'libavutil-dev',

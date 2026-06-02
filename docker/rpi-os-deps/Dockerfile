@@ -35,6 +35,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       gobject-introspection \
       lua5.4 \
       python3 \
+      python3-apt \
       python3-dev \
       python3-opencv \
       python3-pip \

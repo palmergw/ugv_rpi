@@ -64,6 +64,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       libopenblas-dev \
       libportaudio2 \
       libsm6 \
+      libsmbclient-dev \
       libsrtp2-dev \
       libssl-dev \
       libswresample-dev \
@@ -87,7 +88,7 @@ text = Path('setup.sh').read_text()
 logical = re.sub(r'\\\n\s*', ' ', text)
 required = {
     'libopenblas-dev', 'libatlas3-base', 'libcamera-dev', 'python3-opencv',
-    'portaudio19-dev', 'arandr', 'util-linux', 'procps', 'hostapd',
+    'portaudio19-dev', 'libsmbclient-dev', 'arandr', 'util-linux', 'procps', 'hostapd',
     'iproute2', 'iw', 'haveged', 'dnsmasq', 'iptables', 'espeak', 'ffmpeg',
     'libavformat-dev', 'libavcodec-dev', 'libavdevice-dev', 'libavutil-dev',
     'libavfilter-dev', 'libswscale-dev', 'libswresample-dev',

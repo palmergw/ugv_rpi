@@ -41,3 +41,11 @@ jobs:
 
       - name: Build dependency-resolution harness
         run: scripts/test-rpi-os-deps.sh "${{ matrix.codename }}"
+
+      - name: Upload dependency-resolution log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpi-os-deps-${{ matrix.codename }}-linux-arm64
+          path: artifacts/rpi-os-deps/${{ matrix.codename }}-linux-arm64.log
+          if-no-files-found: ignore

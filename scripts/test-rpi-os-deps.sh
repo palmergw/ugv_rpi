@@ -15,6 +15,7 @@ Arguments:
 Environment overrides:
   PLATFORM   Target platform for Raspberry Pi OS (default: linux/arm64).
   DOCKER     Docker-compatible CLI (default: docker).
+  LOG_DIR    Directory for build logs (default: artifacts/rpi-os-deps).
 
 Examples:
   scripts/test-rpi-os-deps.sh
@@ -39,6 +40,8 @@ fi
 platform="${PLATFORM:-linux/arm64}"
 docker_cli="${DOCKER:-docker}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+log_dir="${LOG_DIR:-${repo_root}/artifacts/rpi-os-deps}"
+log_file="${log_dir}/${codename}-${platform//\//-}.log"
 
 if ! command -v "${docker_cli}" >/dev/null 2>&1; then
   echo "error: ${docker_cli} is not installed or not on PATH" >&2
@@ -46,6 +49,15 @@ if ! command -v "${docker_cli}" >/dev/null 2>&1; then
 fi
 
 cd "${repo_root}"
+mkdir -p "${log_dir}"
+
+echo "Running Raspberry Pi OS dependency-resolution harness"
+echo "  codename: ${codename}"
+echo "  platform: ${platform}"
+echo "  log:      ${log_file}"
+echo
+
+set +e
 "${docker_cli}" buildx build \
   --platform "${platform}" \
   --progress plain \
@@ -53,4 +65,16 @@ cd "${repo_root}"
   --tag "ugv-rpi-deps:${codename}-${platform//\//-}" \
   ${load_flag:+${load_flag}} \
   -f docker/rpi-os-deps/Dockerfile \
-  .
+  . 2>&1 | tee "${log_file}"
+status=${PIPESTATUS[0]}
+set -e
+
+if [[ "${status}" -ne 0 ]]; then
+  echo
+  echo "Harness failed with exit status ${status}."
+  echo "Inspect the full Docker build log at: ${log_file}"
+  exit "${status}"
+fi
+
+echo
+echo "Harness passed. Full log: ${log_file}"

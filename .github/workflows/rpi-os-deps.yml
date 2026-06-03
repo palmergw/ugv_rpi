@@ -32,7 +32,6 @@ jobs:
             experimental: false
           - codename: trixie
             experimental: true
-    continue-on-error: ${{ matrix.experimental }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -46,7 +45,17 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build dependency-resolution harness
-        run: scripts/test-rpi-os-deps.sh "${{ matrix.codename }}"
+        run: |
+          if scripts/test-rpi-os-deps.sh "${{ matrix.codename }}"; then
+            exit 0
+          fi
+
+          if [ "${{ matrix.experimental }}" = "true" ]; then
+            echo "::warning::Experimental ${{ matrix.codename }} dependency check failed; see uploaded harness log."
+            exit 0
+          fi
+
+          exit 1
 
       - name: Upload dependency-resolution log
         if: always()

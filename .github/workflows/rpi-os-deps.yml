@@ -1,0 +1,66 @@
+name: Raspberry Pi OS dependency resolution
+
+on:
+  pull_request:
+    paths:
+      - requirements.txt
+      - setup.sh
+      - docker/rpi-os-deps/Dockerfile
+      - scripts/test-rpi-os-deps.sh
+      - .github/workflows/rpi-os-deps.yml
+  workflow_dispatch:
+    inputs:
+      codename:
+        description: Raspberry Pi OS/Debian codename to test
+        required: false
+        default: bookworm
+  schedule:
+    - cron: '17 6 * * 1'
+
+jobs:
+  dependency-resolution:
+    name: ${{ matrix.codename }} / linux-arm64
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # bookworm is the currently supported setup.sh target; trixie tracks the
+        # latest/next Raspberry Pi OS dependency set so breakage is visible early
+        # without failing current-release PRs while upstream wheels are missing.
+        include:
+          - codename: bookworm
+            experimental: false
+          - codename: trixie
+            experimental: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU for arm64 Raspberry Pi OS builds
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build dependency-resolution harness
+        run: |
+          if scripts/test-rpi-os-deps.sh "${{ matrix.codename }}"; then
+            exit 0
+          fi
+
+          if [ "${{ matrix.experimental }}" = "true" ]; then
+            echo "::warning::Experimental ${{ matrix.codename }} dependency check failed; see uploaded harness log."
+            exit 0
+          fi
+
+          exit 1
+
+      - name: Upload dependency-resolution log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpi-os-deps-${{ matrix.codename }}-linux-arm64
+          path: artifacts/rpi-os-deps/${{ matrix.codename }}-linux-arm64.log
+          if-no-files-found: ignore
